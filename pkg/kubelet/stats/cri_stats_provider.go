@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/cadvisor/cache/memory"
 	cadvisorfs "github.com/google/cadvisor/fs"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -363,7 +364,10 @@ func (p *criStatsProvider) getFsInfo(fsID *runtimeapi.FilesystemIdentifier) *cad
 	fsInfo, err := p.cadvisor.GetDirFsInfo(mountpoint)
 	if err != nil {
 		msg := "Failed to get the info of the filesystem with mountpoint"
-		if err == cadvisorfs.ErrNoSuchDevice {
+		noDataFound := errors.Is(err, memory.ErrDataNotFound) ||
+			// from: https://github.com/kubernetes/kubernetes/blob/cf3374e/vendor/github.com/google/cadvisor/fs/fs.go#L593
+			strings.HasSuffix(err.Error(), "in cached partitions map")
+		if err == cadvisorfs.ErrNoSuchDevice || noDataFound {
 			klog.V(2).InfoS(msg, "mountpoint", mountpoint, "err", err)
 		} else {
 			klog.ErrorS(err, msg, "mountpoint", mountpoint)
