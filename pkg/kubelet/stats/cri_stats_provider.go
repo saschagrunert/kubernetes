@@ -477,8 +477,22 @@ func (p *criStatsProvider) makePodStorageStats(s *statsapi.PodStats, rootFsInfo 
 	podName := s.PodRef.Name
 	podUID := types.UID(s.PodRef.UID)
 	vstats, found := p.resourceAnalyzer.GetPodVolumeStats(podUID)
+	klog.V(3).InfoS(
+		"Get pod volume stats",
+		"pod", podName,
+		"found", found,
+	)
 	if !found {
 		return
+	}
+	for _, v := range vstats.EphemeralVolumes {
+		klog.V(3).InfoS(
+			"EphemeralVolumes stats",
+			"pod", podName,
+			"availableBytes", *v.AvailableBytes,
+			"usedBytes", *v.UsedBytes,
+		)
+
 	}
 	logStats, err := p.hostStatsProvider.getPodLogStats(podNs, podName, podUID, rootFsInfo)
 	if err != nil {

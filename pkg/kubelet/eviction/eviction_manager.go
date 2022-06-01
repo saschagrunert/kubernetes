@@ -455,8 +455,16 @@ func (m *managerImpl) localStorageEviction(pods []*v1.Pod, statsFunc statsFunc) 
 	for _, pod := range pods {
 		podStats, ok := statsFunc(pod)
 		if !ok {
+			klog.V(3).InfoS(
+				"Eviction manager: no stats for pod",
+				"pod", pod.Name,
+			)
 			continue
 		}
+		klog.V(3).InfoS(
+			"Eviction manager: pod stats",
+			"pod", pod.Name,
+		)
 
 		if m.emptyDirLimitEviction(podStats, pod) {
 			evicted = append(evicted, pod)
@@ -513,6 +521,13 @@ func (m *managerImpl) podEphemeralStorageLimitEviction(podStats statsapi.PodStat
 		podEphemeralStorageTotalUsage = resource.NewQuantity(int64(*podStats.EphemeralStorage.UsedBytes), resource.BinarySI)
 	}
 	podEphemeralStorageLimit := podLimits[v1.ResourceEphemeralStorage]
+	klog.V(3).InfoS(
+		"Eviction manager: ephermal storage usage",
+		"pod", pod.Name,
+		"cmp", podEphemeralStorageTotalUsage.Cmp(podEphemeralStorageLimit),
+		"usage", podEphemeralStorageTotalUsage.String(),
+		"limit", podEphemeralStorageLimit.String(),
+	)
 	if podEphemeralStorageTotalUsage.Cmp(podEphemeralStorageLimit) > 0 {
 		// the total usage of pod exceeds the total size limit of containers, evict the pod
 		if m.evictPod(pod, 0, fmt.Sprintf(podEphemeralStorageMessageFmt, podEphemeralStorageLimit.String()), nil) {
