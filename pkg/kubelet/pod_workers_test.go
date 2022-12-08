@@ -188,10 +188,11 @@ func newNamedPod(uid, namespace, name string, isStatic bool) *v1.Pod {
 
 // syncPodRecord is a record of a sync pod call
 type syncPodRecord struct {
-	name       string
-	updateType kubetypes.SyncPodType
-	runningPod *kubecontainer.Pod
-	terminated bool
+	name        string
+	updateType  kubetypes.SyncPodType
+	runningPod  *kubecontainer.Pod
+	terminated  bool
+	gracePeriod *int64
 }
 
 type FakeQueueItem struct {
@@ -269,9 +270,10 @@ func createPodWorkers() (*podWorkers, map[types.UID][]syncPodRecord) {
 				lock.Lock()
 				defer lock.Unlock()
 				processed[pod.UID] = append(processed[pod.UID], syncPodRecord{
-					name:       pod.Name,
-					updateType: kubetypes.SyncPodKill,
-					runningPod: runningPod,
+					name:        pod.Name,
+					updateType:  kubetypes.SyncPodKill,
+					runningPod:  runningPod,
+					gracePeriod: gracePeriod,
 				})
 			}()
 			return nil

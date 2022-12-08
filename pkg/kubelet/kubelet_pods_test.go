@@ -17,6 +17,7 @@ limitations under the License.
 package kubelet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -40,11 +41,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/diff"
 	core "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
-	netutils "k8s.io/utils/net"
-
-	// TODO: remove this import if
-	// api.Registry.GroupOrDie(v1.GroupName).GroupVersions[0].String() is changed
-	// to "v1"?
 
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
@@ -57,6 +53,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cri/streaming/remotecommand"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
+	netutils "k8s.io/utils/net"
 )
 
 func TestNodeHostsFileContent(t *testing.T) {
@@ -3786,5 +3783,423 @@ func TestConvertToAPIContainerStatusesDataRace(t *testing.T) {
 		go func() {
 			kl.convertToAPIContainerStatuses(pod, criStatus, []v1.ContainerStatus{}, []v1.Container{}, false, false)
 		}()
+	}
+}
+
+func TestKubelet_HandlePodCleanups(t *testing.T) {
+	two := int64(2)
+	deleted := metav1.NewTime(time.Unix(2, 0).UTC())
+
+	tests := []struct {
+		name           string
+		pods           []*v1.Pod
+		runtimePods    []*containertest.FakePod
+		terminatingErr error
+		prepareWorker  func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord)
+		wantWorker     func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord)
+		wantErr        bool
+	}{
+		{
+			name:    "missing pod is requested for termination with short grace period",
+			wantErr: false,
+			runtimePods: []*containertest.FakePod{
+				{
+					Pod: &kubecontainer.Pod{
+						ID:        types.UID("1"),
+						Name:      "pod1",
+						Namespace: "ns1",
+						Containers: []*kubecontainer.Container{
+							{Name: "container-1", ID: kubecontainer.ContainerID{Type: "test", ID: "c1"}},
+						},
+					},
+				},
+			},
+			wantWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				drainAllWorkers(w)
+				uid := types.UID("1")
+				if len(w.podSyncStatuses) != 1 {
+					t.Fatalf("unexpected sync statuses: %#v", w.podSyncStatuses)
+				}
+				s, ok := w.podSyncStatuses[uid]
+				if !ok || !s.IsTerminationRequested() {
+					t.Fatalf("unexpected requested pod termination: %#v", s)
+				}
+				r, ok := records[uid]
+				if !ok || len(r) != 1 || r[0].updateType != kubetypes.SyncPodKill || r[0].terminated || r[0].runningPod == nil || r[0].gracePeriod == nil || *r[0].gracePeriod != 1 {
+					t.Fatalf("unexpected pod sync records: %#v", r)
+				}
+			},
+		},
+		{
+			name:    "terminating pod that errored and is not in config is notified by the cleanup",
+			wantErr: false,
+			runtimePods: []*containertest.FakePod{
+				{
+					Pod: &kubecontainer.Pod{
+						ID:        types.UID("1"),
+						Name:      "pod1",
+						Namespace: "ns1",
+						Containers: []*kubecontainer.Container{
+							{Name: "container-1", ID: kubecontainer.ContainerID{Type: "test", ID: "c1"}},
+						},
+					},
+				},
+			},
+			terminatingErr: errors.New("unable to terminate"),
+			prepareWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				// send a create
+				pod := &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod1", Namespace: "ns1", UID: types.UID("1")},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				}
+				w.UpdatePod(UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodCreate,
+					StartTime:  time.Unix(1, 0).UTC(),
+					Pod:        pod,
+				})
+				drainAllWorkers(w)
+
+				// send a delete update
+				two := int64(2)
+				deleted := metav1.NewTime(time.Unix(2, 0).UTC())
+				updatedPod := &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:                       "pod1",
+						Namespace:                  "ns1",
+						UID:                        types.UID("1"),
+						DeletionGracePeriodSeconds: &two,
+						DeletionTimestamp:          &deleted,
+					},
+					Spec: v1.PodSpec{
+						TerminationGracePeriodSeconds: &two,
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				}
+				w.UpdatePod(UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodKill,
+					StartTime:  time.Unix(3, 0).UTC(),
+					Pod:        updatedPod,
+				})
+				drainAllWorkers(w)
+				r, ok := records[updatedPod.UID]
+				if !ok || len(r) != 2 || r[1].gracePeriod == nil || *r[1].gracePeriod != 2 {
+					t.Fatalf("unexpected records: %#v", records)
+				}
+				// pod worker thinks pod1 exists, but the kubelet will not have it in the pod manager
+			},
+			wantWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				uid := types.UID("1")
+				if len(w.podSyncStatuses) != 1 {
+					t.Fatalf("unexpected sync statuses: %#v", w.podSyncStatuses)
+				}
+				s, ok := w.podSyncStatuses[uid]
+				if !ok || !s.IsTerminationRequested() || !s.IsTerminationStarted() || s.IsFinished() || s.IsWorking() || !s.IsDeleted() {
+					t.Fatalf("unexpected requested pod termination: %#v", s)
+				}
+				r, ok := records[uid]
+
+				// expect we get a pod sync record for kill that should have the same grace period as before (2)
+				if !ok || len(r) != 3 || r[2].updateType != kubetypes.SyncPodKill || r[2].terminated || r[2].runningPod == nil || r[2].gracePeriod == nil || *r[2].gracePeriod != 2 {
+					t.Fatalf("unexpected pod sync records: %#v", r)
+				}
+			},
+		},
+		{
+			name:    "terminating pod that errored and is not in config or worker is force killed by the cleanup",
+			wantErr: false,
+			runtimePods: []*containertest.FakePod{
+				{
+					Pod: &kubecontainer.Pod{
+						ID:        types.UID("1"),
+						Name:      "pod1",
+						Namespace: "ns1",
+						Containers: []*kubecontainer.Container{
+							{Name: "container-1", ID: kubecontainer.ContainerID{Type: "test", ID: "c1"}},
+						},
+					},
+				},
+			},
+			terminatingErr: errors.New("unable to terminate"),
+			wantWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				uid := types.UID("1")
+				if len(w.podSyncStatuses) != 1 {
+					t.Fatalf("unexpected sync statuses: %#v", w.podSyncStatuses)
+				}
+				s, ok := w.podSyncStatuses[uid]
+				if !ok || !s.IsTerminationRequested() || !s.IsTerminationStarted() || s.IsFinished() || s.IsWorking() || !s.IsDeleted() {
+					t.Fatalf("unexpected requested pod termination: %#v", s)
+				}
+				r, ok := records[uid]
+
+				// expect that a pod the pod worker does not recognize is force killed with grace period 1
+				if !ok || len(r) != 1 || r[0].updateType != kubetypes.SyncPodKill || r[0].terminated || r[0].runningPod == nil || r[0].gracePeriod == nil || *r[0].gracePeriod != 1 {
+					t.Fatalf("unexpected pod sync records: %#v", r)
+				}
+			},
+		},
+		{
+			name:    "terminating pod that is known to the config gets no update during pod cleanup",
+			wantErr: false,
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:                       "pod1",
+						Namespace:                  "ns1",
+						UID:                        types.UID("1"),
+						DeletionGracePeriodSeconds: &two,
+						DeletionTimestamp:          &deleted,
+					},
+					Spec: v1.PodSpec{
+						TerminationGracePeriodSeconds: &two,
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				},
+			},
+			runtimePods: []*containertest.FakePod{
+				{
+					Pod: &kubecontainer.Pod{
+						ID:        types.UID("1"),
+						Name:      "pod1",
+						Namespace: "ns1",
+						Containers: []*kubecontainer.Container{
+							{Name: "container-1", ID: kubecontainer.ContainerID{Type: "test", ID: "c1"}},
+						},
+					},
+				},
+			},
+			terminatingErr: errors.New("unable to terminate"),
+			prepareWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				// send a create
+				pod := &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod1", Namespace: "ns1", UID: types.UID("1")},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				}
+				w.UpdatePod(UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodCreate,
+					StartTime:  time.Unix(1, 0).UTC(),
+					Pod:        pod,
+				})
+				drainAllWorkers(w)
+
+				// send a delete update
+				updatedPod := &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:                       "pod1",
+						Namespace:                  "ns1",
+						UID:                        types.UID("1"),
+						DeletionGracePeriodSeconds: &two,
+						DeletionTimestamp:          &deleted,
+					},
+					Spec: v1.PodSpec{
+						TerminationGracePeriodSeconds: &two,
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				}
+				w.UpdatePod(UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodKill,
+					StartTime:  time.Unix(3, 0).UTC(),
+					Pod:        updatedPod,
+				})
+				drainAllWorkers(w)
+
+				r, ok := records[updatedPod.UID]
+				if !ok || len(r) != 2 || r[1].gracePeriod == nil || *r[1].gracePeriod != 2 {
+					t.Fatalf("unexpected records: %#v", records)
+				}
+				// pod worker thinks pod1 is terminated and pod1 visible to config
+			},
+			wantWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				uid := types.UID("1")
+				if len(w.podSyncStatuses) != 1 {
+					t.Fatalf("unexpected sync statuses: %#v", w.podSyncStatuses)
+				}
+				s, ok := w.podSyncStatuses[uid]
+				if !ok || !s.IsTerminationRequested() || !s.IsTerminationStarted() || s.IsFinished() || s.IsWorking() || !s.IsDeleted() {
+					t.Fatalf("unexpected requested pod termination: %#v", s)
+				}
+
+				// no pod sync record was delivered
+				r, ok := records[uid]
+				if !ok || len(r) != 2 {
+					t.Fatalf("unexpected pod sync records: %#v", r)
+				}
+			},
+		},
+		{
+			name:    "pod that could not start and is not in config is force terminated during pod cleanup",
+			wantErr: false,
+			runtimePods: []*containertest.FakePod{
+				{
+					Pod: &kubecontainer.Pod{
+						ID:        types.UID("1"),
+						Name:      "pod1",
+						Namespace: "ns1",
+						Containers: []*kubecontainer.Container{
+							{Name: "container-1", ID: kubecontainer.ContainerID{Type: "test", ID: "c1"}},
+						},
+					},
+				},
+			},
+			terminatingErr: errors.New("unable to terminate"),
+			prepareWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				// send a create of a static pod
+				pod := &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pod1",
+						Namespace: "ns1",
+						UID:       types.UID("1"),
+						Annotations: map[string]string{
+							kubetypes.ConfigSourceAnnotationKey: kubetypes.FileSource,
+						},
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				}
+				// block startup of the static pod due to full name collision
+				w.startedStaticPodsByFullname[kubecontainer.GetPodFullName(pod)] = types.UID("2")
+
+				w.UpdatePod(UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodCreate,
+					StartTime:  time.Unix(1, 0).UTC(),
+					Pod:        pod,
+				})
+				drainAllWorkers(w)
+
+				if _, ok := records[pod.UID]; ok {
+					t.Fatalf("unexpected records: %#v", records)
+				}
+				// pod worker is unaware of pod1 yet, and the kubelet will not have it in the pod manager
+			},
+			wantWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				uid := types.UID("1")
+				if len(w.podSyncStatuses) != 1 {
+					t.Fatalf("unexpected sync statuses: %#v", w.podSyncStatuses)
+				}
+				s, ok := w.podSyncStatuses[uid]
+				if !ok || !s.IsTerminationRequested() || !s.IsTerminationStarted() || s.IsFinished() || s.IsWorking() || !s.IsDeleted() {
+					t.Fatalf("unexpected requested pod termination: %#v", s)
+				}
+				r, ok := records[uid]
+
+				// expect we get a pod sync record for kill that should have an immediate grace period
+				if !ok || len(r) != 1 || r[0].updateType != kubetypes.SyncPodKill || r[0].terminated || r[0].runningPod == nil || r[0].gracePeriod == nil || *r[0].gracePeriod != 1 {
+					t.Fatalf("unexpected pod sync records: %#v", r)
+				}
+			},
+		},
+		{
+			name:    "started pod that is not in config is force terminated during pod cleanup",
+			wantErr: false,
+			runtimePods: []*containertest.FakePod{
+				{
+					Pod: &kubecontainer.Pod{
+						ID:        types.UID("1"),
+						Name:      "pod1",
+						Namespace: "ns1",
+						Containers: []*kubecontainer.Container{
+							{Name: "container-1", ID: kubecontainer.ContainerID{Type: "test", ID: "c1"}},
+						},
+					},
+				},
+			},
+			terminatingErr: errors.New("unable to terminate"),
+			prepareWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				// send a create of a static pod
+				pod := &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pod1",
+						Namespace: "ns1",
+						UID:       types.UID("1"),
+						Annotations: map[string]string{
+							kubetypes.ConfigSourceAnnotationKey: kubetypes.FileSource,
+						},
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{Name: "container-1"},
+						},
+					},
+				}
+
+				w.UpdatePod(UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodCreate,
+					StartTime:  time.Unix(1, 0).UTC(),
+					Pod:        pod,
+				})
+				drainAllWorkers(w)
+
+				r, ok := records[pod.UID]
+				if !ok || len(r) != 1 || r[0].updateType != kubetypes.SyncPodCreate {
+					t.Fatalf("unexpected records: %#v", records)
+				}
+				// pod worker is aware of pod1, but the kubelet will not have it in the pod manager
+			},
+			wantWorker: func(t *testing.T, w *podWorkers, records map[types.UID][]syncPodRecord) {
+				uid := types.UID("1")
+				if len(w.podSyncStatuses) != 1 {
+					t.Fatalf("unexpected sync statuses: %#v", w.podSyncStatuses)
+				}
+				s, ok := w.podSyncStatuses[uid]
+				if !ok || !s.IsTerminationRequested() || !s.IsTerminationStarted() || s.IsFinished() || s.IsWorking() || !s.IsDeleted() {
+					t.Fatalf("unexpected requested pod termination: %#v", s)
+				}
+				r, ok := records[uid]
+
+				// expect we get a pod sync record for kill that should have an immediate grace period
+				if !ok || len(r) != 2 || r[1].updateType != kubetypes.SyncPodKill || r[1].terminated || r[1].runningPod == nil || r[1].gracePeriod == nil || *r[1].gracePeriod != 1 {
+					t.Fatalf("unexpected pod sync records: %#v", r)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testKubelet := newTestKubelet(t, false)
+			defer testKubelet.Cleanup()
+			kl := testKubelet.kubelet
+
+			podWorkers, records := createPodWorkers()
+			kl.podWorkers = podWorkers
+			if tt.terminatingErr != nil {
+				fn := podWorkers.syncTerminatingPodFn
+				podWorkers.syncTerminatingPodFn = func(ctx context.Context, pod *v1.Pod, podStatus *kubecontainer.PodStatus, runningPod *kubecontainer.Pod, gracePeriod *int64, podStatusFn func(*v1.PodStatus)) error {
+					if err := fn(ctx, pod, podStatus, runningPod, gracePeriod, podStatusFn); err != nil {
+						t.Fatalf("unexpected error in syncTerminatingPodFn: %v", err)
+					}
+					return tt.terminatingErr
+				}
+			}
+			if tt.prepareWorker != nil {
+				tt.prepareWorker(t, podWorkers, records)
+			}
+
+			testKubelet.fakeRuntime.PodList = tt.runtimePods
+			kl.podManager.SetPods(tt.pods)
+
+			if err := kl.HandlePodCleanups(); (err != nil) != tt.wantErr {
+				t.Errorf("Kubelet.HandlePodCleanups() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantWorker != nil {
+				drainAllWorkers(podWorkers)
+				tt.wantWorker(t, podWorkers, records)
+			}
+		})
 	}
 }

@@ -1125,28 +1125,26 @@ func (kl *Kubelet) HandlePodCleanups() error {
 		return err
 	}
 	for _, runningPod := range runningRuntimePods {
-		switch workerState, ok := workingPods[runningPod.ID]; {
-		case ok && workerState == SyncPod, ok && workerState == TerminatingPod:
-			// if the pod worker is already in charge of this pod, we don't need to do anything
-			continue
-		default:
-			// If the pod isn't in the set that should be running and isn't already terminating, terminate
-			// now. This termination is aggressive because all known pods should already be in a known state
-			// (i.e. a removed static pod should already be terminating), so these are pods that were
-			// orphaned due to kubelet restart or bugs. Since housekeeping blocks other config changes, we
-			// know that another pod wasn't started in the background so we are safe to terminate the
-			// unknown pods.
-			if _, ok := allPodsByUID[runningPod.ID]; !ok {
-				klog.V(3).InfoS("Clean up orphaned pod containers", "podUID", runningPod.ID)
+		// If the pod isn't in the set that should be running and isn't already terminating, terminate
+		// now. Since housekeeping is synchronous to other pod worker updates, we know that no pods have
+		// been added to the pod worker in the meantime.
+		if _, ok := allPodsByUID[runningPod.ID]; !ok {
+			// If the pod is not a known working pod, or isn't in the Sync or Terminating phases already, aggressively
+			// terminate the pod. Otherwise we simply notify the pod worker that the pod should be terminating which
+			// allows graceful termination for updated static pods or force deleted API server pods.
+			var killPodOptions *KillPodOptions
+			if workerState, ok := workingPods[runningPod.ID]; !ok || (workerState != SyncPod && workerState != TerminatingPod) {
 				one := int64(1)
-				kl.podWorkers.UpdatePod(UpdatePodOptions{
-					UpdateType: kubetypes.SyncPodKill,
-					RunningPod: runningPod,
-					KillPodOptions: &KillPodOptions{
-						PodTerminationGracePeriodSecondsOverride: &one,
-					},
-				})
+				killPodOptions = &KillPodOptions{
+					PodTerminationGracePeriodSecondsOverride: &one,
+				}
 			}
+			klog.V(3).InfoS("Clean up orphaned pod containers", "podUID", runningPod.ID, "killPodOptions", killPodOptions)
+			kl.podWorkers.UpdatePod(UpdatePodOptions{
+				UpdateType:     kubetypes.SyncPodKill,
+				RunningPod:     runningPod,
+				KillPodOptions: killPodOptions,
+			})
 		}
 	}
 
