@@ -71,6 +71,8 @@ func toRuntimeAPIImageSpec(imageSpec kubecontainer.ImageSpec) *runtimeapi.ImageS
 	spec := runtimeapi.ImageSpec{
 		Image:       imageSpec.Image,
 		Annotations: annotations,
+		Mount:       imageSpec.Mount,
+		MountLabel:  imageSpec.MountLabel,
 	}
 	// if RuntimeClassInImageCriAPI feature gate is enabled, set runtimeHandler CRI field
 	if utilfeature.DefaultFeatureGate.Enabled(features.RuntimeClassInImageCriAPI) {

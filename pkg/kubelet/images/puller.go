@@ -28,6 +28,7 @@ import (
 
 type pullResult struct {
 	imageRef     string
+	mountPoint   string
 	imageSize    uint64
 	err          error
 	pullDuration time.Duration
@@ -58,14 +59,23 @@ func (pip *parallelImagePuller) pullImage(ctx context.Context, spec kubecontaine
 			defer func() { <-pip.tokens }()
 		}
 		startTime := time.Now()
-		imageRef, err := pip.imageService.PullImage(ctx, spec, pullSecrets, podSandboxConfig)
+		res, err := pip.imageService.PullImage(ctx, spec, pullSecrets, podSandboxConfig)
+		if err != nil {
+			pullChan <- pullResult{
+				err:          err,
+				pullDuration: time.Since(startTime),
+			}
+			return
+
+		}
 		var size uint64
-		if err == nil && imageRef != "" {
+		if res.ImageRef != "" {
 			// Getting the image size with best effort, ignoring the error.
 			size, _ = pip.imageService.GetImageSize(ctx, spec)
 		}
 		pullChan <- pullResult{
-			imageRef:     imageRef,
+			imageRef:     res.ImageRef,
+			mountPoint:   res.Mountpoint,
 			imageSize:    size,
 			err:          err,
 			pullDuration: time.Since(startTime),
@@ -108,16 +118,25 @@ func (sip *serialImagePuller) pullImage(ctx context.Context, spec kubecontainer.
 func (sip *serialImagePuller) processImagePullRequests() {
 	for pullRequest := range sip.pullRequests {
 		startTime := time.Now()
-		imageRef, err := sip.imageService.PullImage(pullRequest.ctx, pullRequest.spec, pullRequest.pullSecrets, pullRequest.podSandboxConfig)
+		res, err := sip.imageService.PullImage(pullRequest.ctx, pullRequest.spec, pullRequest.pullSecrets, pullRequest.podSandboxConfig)
+		if err != nil {
+			pullRequest.pullChan <- pullResult{
+				err: err,
+				// Note: pullDuration includes credential resolution and getting the image size.
+				pullDuration: time.Since(startTime),
+			}
+			return
+		}
+
 		var size uint64
-		if err == nil && imageRef != "" {
+		if res.ImageRef != "" {
 			// Getting the image size with best effort, ignoring the error.
 			size, _ = sip.imageService.GetImageSize(pullRequest.ctx, pullRequest.spec)
 		}
 		pullRequest.pullChan <- pullResult{
-			imageRef:  imageRef,
-			imageSize: size,
-			err:       err,
+			imageRef:   res.ImageRef,
+			mountPoint: res.Mountpoint,
+			imageSize:  size,
 			// Note: pullDuration includes credential resolution and getting the image size.
 			pullDuration: time.Since(startTime),
 		}

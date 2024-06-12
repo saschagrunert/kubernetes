@@ -32,16 +32,16 @@ import (
 
 // PullImage pulls an image from the network to local storage using the supplied
 // secrets if necessary.
-func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecontainer.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *runtimeapi.PodSandboxConfig) (string, error) {
+func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecontainer.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *runtimeapi.PodSandboxConfig) (*runtimeapi.PullImageResponse, error) {
 	img := image.Image
 	repoToPull, _, _, err := parsers.ParseImageName(img)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	keyring, err := credentialprovidersecrets.MakeDockerKeyring(pullSecrets, m.keyring)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	imgSpec := toRuntimeAPIImageSpec(image)
@@ -50,13 +50,13 @@ func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecon
 	if !withCredentials {
 		klog.V(3).InfoS("Pulling image without credentials", "image", img)
 
-		imageRef, err := m.imageService.PullImage(ctx, imgSpec, nil, podSandboxConfig)
+		resp, err := m.imageService.PullImage(ctx, imgSpec, nil, podSandboxConfig)
 		if err != nil {
 			klog.ErrorS(err, "Failed to pull image", "image", img)
-			return "", err
+			return nil, err
 		}
 
-		return imageRef, nil
+		return resp, nil
 	}
 
 	var pullErrs []error
@@ -70,16 +70,16 @@ func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecon
 			RegistryToken: currentCreds.RegistryToken,
 		}
 
-		imageRef, err := m.imageService.PullImage(ctx, imgSpec, auth, podSandboxConfig)
+		resp, err := m.imageService.PullImage(ctx, imgSpec, auth, podSandboxConfig)
 		// If there was no error, return success
 		if err == nil {
-			return imageRef, nil
+			return resp, nil
 		}
 
 		pullErrs = append(pullErrs, err)
 	}
 
-	return "", utilerrors.NewAggregate(pullErrs)
+	return nil, utilerrors.NewAggregate(pullErrs)
 }
 
 // GetImageRef gets the ID of the image which has already been in
@@ -106,6 +106,20 @@ func (m *kubeGenericRuntimeManager) GetImageSize(ctx context.Context, image kube
 		return 0, nil
 	}
 	return resp.Image.Size_, nil
+}
+
+// GetImageMountPoint gets the mount point of the image which has already been in
+// the local storage. It returns ("", nil) if the image isn't in the local storage.
+func (m *kubeGenericRuntimeManager) GetImageMountPoint(ctx context.Context, image kubecontainer.ImageSpec) (string, error) {
+	resp, err := m.imageService.ImageStatus(ctx, toRuntimeAPIImageSpec(image), false)
+	if err != nil {
+		klog.ErrorS(err, "Failed to get image status", "image", image.Image)
+		return "", err
+	}
+	if resp.Image == nil {
+		return "", nil
+	}
+	return resp.Image.Mountpoint, nil
 }
 
 // ListImages gets all images currently on the machine.
@@ -137,6 +151,7 @@ func (m *kubeGenericRuntimeManager) ListImages(ctx context.Context) ([]kubeconta
 			RepoDigests: img.RepoDigests,
 			Spec:        toKubeContainerImageSpec(img),
 			Pinned:      img.Pinned,
+			MountPoint:  img.Mountpoint,
 		})
 	}
 

@@ -120,8 +120,14 @@ func NewFakeSELinuxLabelTranslator() SELinuxLabelTranslator {
 
 // SELinuxOptionsToFileLabel returns SELinux file label for given options.
 func (l *fakeTranslator) SELinuxOptionsToFileLabel(opts *v1.SELinuxOptions) (string, error) {
+	return SELinuxOptionsToLabel(opts, true), nil
+}
+
+// SELinuxOptionsToLabel returns SELinux label for given options.
+// If file is true, then it will return a file label, otherwise a directory label.
+func SELinuxOptionsToLabel(opts *v1.SELinuxOptions, file bool) string {
 	if opts == nil {
-		return "", nil
+		return ""
 	}
 	// Fill empty values from "system defaults" (taken from Fedora Linux).
 	user := opts.User
@@ -137,9 +143,13 @@ func (l *fakeTranslator) SELinuxOptionsToFileLabel(opts *v1.SELinuxOptions) (str
 	// opts is context of the *process* to run in a container. Translate
 	// process type "container_t" to file label type "container_file_t".
 	// (The rest of the context is the same for processes and files).
-	fileType := opts.Type
-	if fileType == "" || fileType == "container_t" {
-		fileType = "container_file_t"
+	typ := opts.Type
+	if typ == "" {
+		if file {
+			typ = "container_file_t"
+		} else {
+			typ = "container_t"
+		}
 	}
 
 	level := opts.Level
@@ -148,8 +158,8 @@ func (l *fakeTranslator) SELinuxOptionsToFileLabel(opts *v1.SELinuxOptions) (str
 		level = "s0:c998,c999"
 	}
 
-	ctx := fmt.Sprintf("%s:%s:%s:%s", user, role, fileType, level)
-	return ctx, nil
+	ctx := fmt.Sprintf("%s:%s:%s:%s", user, role, typ, level)
+	return ctx
 }
 
 func (l *fakeTranslator) SELinuxEnabled() bool {

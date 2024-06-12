@@ -248,6 +248,26 @@ func (im *realImageGCManager) detectImages(ctx context.Context, detectTime time.
 	// Make a set of images in use by containers.
 	for _, pod := range pods {
 		for _, container := range pod.Containers {
+			if utilfeature.DefaultFeatureGate.Enabled(features.OCIVolume) {
+				status, err := im.runtime.GetContainerStatus(ctx, container.ID)
+				if err != nil {
+					return imagesInUse, fmt.Errorf("get container status: %w", err)
+				}
+				for _, mount := range status.Mounts {
+					for _, image := range images {
+						if image.MountPoint == "" {
+							continue
+						}
+
+						// Check if the container is using the image as mount
+						if image.MountPoint == mount.HostPath {
+							klog.V(5).InfoS("Container uses OCI object as mount", "pod", klog.KRef(pod.Namespace, pod.Name), "containerName", container.Name, "mountPoint", image.MountPoint, "imageID", image.ID)
+							imagesInUse.Insert(image.ID)
+						}
+					}
+				}
+			}
+
 			if !isRuntimeClassInImageCriAPIEnabled {
 				klog.V(5).InfoS("Container uses image", "pod", klog.KRef(pod.Namespace, pod.Name), "containerName", container.Name, "containerImage", container.Image, "imageID", container.ImageID, "imageRef", container.ImageRef)
 				imagesInUse.Insert(container.ImageID)

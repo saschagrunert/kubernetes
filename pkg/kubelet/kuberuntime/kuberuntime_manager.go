@@ -65,6 +65,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/util/cache"
 	"k8s.io/kubernetes/pkg/kubelet/util/format"
 	sc "k8s.io/kubernetes/pkg/securitycontext"
+	"k8s.io/kubernetes/pkg/volume/util"
 )
 
 const (
@@ -1218,6 +1219,52 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		return
 	}
 
+	ociVolumes := map[string]string{}
+	if utilfeature.DefaultFeatureGate.Enabled(features.OCIVolume) {
+		podRuntimeHandler, err := m.getPodRuntimeHandler(pod)
+		if err != nil {
+			klog.ErrorS(err, "Failed to get pod runtime handler", "pod", klog.KObj(pod))
+			result.Fail(err)
+			return
+		}
+
+		for _, volume := range pod.Spec.Volumes {
+			if volume.OCI != nil {
+				ref, _ := ref.GetReference(legacyscheme.Scheme, pod) // ref can be nil, no error check required
+				mountLabel := util.SELinuxOptionsToLabel(pod.Spec.SecurityContext.SELinuxOptions, false)
+				reference, _, mountPoint, err := m.imagePuller.EnsureOCIObject(
+					ctx, "OCI object", ref, pod, volume.OCI.Reference, true, mountLabel, pullSecrets, podSandboxConfig, podRuntimeHandler, volume.OCI.PullPolicy,
+				)
+				if err != nil {
+					klog.ErrorS(err, "Failed to ensure OCI object", "pod", klog.KObj(pod))
+					result.Fail(err)
+					return
+				}
+
+				// Mount point is not supported by runtime
+				if mountPoint == "" {
+					const msg = "Failed to get OCI object mount point, runtime may not support it"
+					m.recorder.Eventf(ref, v1.EventTypeWarning, events.FailedOCIMountPoint, msg)
+					klog.ErrorS(err, msg, "pod", klog.KObj(pod))
+					result.Fail(errors.New(msg))
+					return
+				}
+
+				// Mount point does not exist or is not accessible locally
+				if _, err := os.Stat(mountPoint); err != nil {
+					const msg = "Failed to access OCI object mount point"
+					m.recorder.Eventf(ref, v1.EventTypeWarning, events.FailedOCIMountPoint, msg+": %v", err)
+					klog.ErrorS(err, msg, "pod", klog.KObj(pod))
+					result.Fail(fmt.Errorf("%s: %w", msg, err))
+					return
+				}
+
+				klog.V(4).InfoS("Pulled OCI object to mountpoint", "mountPoint", mountPoint, "reference", reference, "pod", klog.KObj(pod))
+				ociVolumes[volume.Name] = mountPoint
+			}
+		}
+	}
+
 	// Helper containing boilerplate common to starting all types of containers.
 	// typeName is a description used to describe this type of container in log messages,
 	// currently: "container", "init container" or "ephemeral container"
@@ -1240,7 +1287,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		}
 		klog.V(4).InfoS("Creating container in pod", "containerType", typeName, "container", spec.container, "pod", klog.KObj(pod))
 		// NOTE (aramase) podIPs are populated for single stack and dual stack clusters. Send only podIPs.
-		if msg, err := m.startContainer(ctx, podSandboxID, podSandboxConfig, spec, pod, podStatus, pullSecrets, podIP, podIPs); err != nil {
+		if msg, err := m.startContainer(ctx, podSandboxID, podSandboxConfig, spec, pod, podStatus, pullSecrets, podIP, podIPs, ociVolumes); err != nil {
 			// startContainer() returns well-defined error codes that have reasonable cardinality for metrics and are
 			// useful to cluster administrators to distinguish "server errors" from "user errors".
 			metrics.StartedContainersErrorsTotal.WithLabelValues(metricLabel, err.Error()).Inc()
@@ -1509,6 +1556,14 @@ func (m *kubeGenericRuntimeManager) GetPodStatus(ctx context.Context, uid kubety
 		ContainerStatuses: containerStatuses,
 		TimeStamp:         timestamp,
 	}, nil
+}
+
+func (m *kubeGenericRuntimeManager) GetContainerStatus(ctx context.Context, id kubecontainer.ContainerID) (*kubecontainer.Status, error) {
+	resp, err := m.runtimeService.ContainerStatus(ctx, id.ID, false)
+	if err != nil {
+		return nil, fmt.Errorf("runtime container status: %w", err)
+	}
+	return m.convertToKubeContainerStatus(resp.GetStatus()), nil
 }
 
 // GarbageCollect removes dead containers using the specified container gc policy.

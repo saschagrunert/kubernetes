@@ -232,6 +232,36 @@ func (mr *MockRuntimeMockRecorder) GetImageSize(ctx, image any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetImageSize", reflect.TypeOf((*MockRuntime)(nil).GetImageSize), ctx, image)
 }
 
+// GetImageMountPoint mocks base method.
+func (m *MockRuntime) GetImageMountPoint(ctx context.Context, image container.ImageSpec) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetImageMountPoint", ctx, image)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetImageMountPoint indicates an expected call of GetImageMountPoint.
+func (mr *MockRuntimeMockRecorder) GetImageMountPoint(ctx, image any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetImageMountPoint", reflect.TypeOf((*MockRuntime)(nil).GetImageMountPoint), ctx, image)
+}
+
+// GetImageRef mocks base method.
+func (m *MockRuntime) GetContainerStatus(ctx context.Context, id container.ContainerID) (*container.Status, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetContainerStatus", ctx, id)
+	ret0, _ := ret[0].(*container.Status)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetImageRef indicates an expected call of GetImageRef.
+func (mr *MockRuntimeMockRecorder) GetContainerStatus(ctx, id container.ContainerID) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetContainerStatus", reflect.TypeOf((*MockRuntime)(nil).GetContainerStatus), ctx, id)
+}
+
 // GetPodStatus mocks base method.
 func (m *MockRuntime) GetPodStatus(ctx context.Context, uid types.UID, name, namespace string) (*container.PodStatus, error) {
 	m.ctrl.T.Helper()
@@ -352,10 +382,10 @@ func (mr *MockRuntimeMockRecorder) ListPodSandboxMetrics(ctx any) *gomock.Call {
 }
 
 // PullImage mocks base method.
-func (m *MockRuntime) PullImage(ctx context.Context, image container.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *v10.PodSandboxConfig) (string, error) {
+func (m *MockRuntime) PullImage(ctx context.Context, image container.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *v10.PodSandboxConfig) (*v10.PullImageResponse, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PullImage", ctx, image, pullSecrets, podSandboxConfig)
-	ret0, _ := ret[0].(string)
+	ret0, _ := ret[0].(*v10.PullImageResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -619,10 +649,10 @@ func (mr *MockImageServiceMockRecorder) ListImages(ctx any) *gomock.Call {
 }
 
 // PullImage mocks base method.
-func (m *MockImageService) PullImage(ctx context.Context, image container.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *v10.PodSandboxConfig) (string, error) {
+func (m *MockImageService) PullImage(ctx context.Context, image container.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *v10.PodSandboxConfig) (*v10.PullImageResponse, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PullImage", ctx, image, pullSecrets, podSandboxConfig)
-	ret0, _ := ret[0].(string)
+	ret0, _ := ret[0].(*v10.PullImageResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

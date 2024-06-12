@@ -810,6 +810,12 @@ message ImageSpec {
     // If the runtime handler is unknown, the request should be rejected.
     // An empty string would select the default runtime handler.
     string runtime_handler = 19;
+
+    // Indicate that the OCI object should be mounted.
+    bool mount = 20;
+
+    // SELinux label to be used.
+    string mount_label = 21;
 }
 
 message KeyValue {
@@ -1481,6 +1487,8 @@ message Image {
     // It must only be treated as a recommendation -- the client can still request that the image be deleted,
     // and the runtime must oblige.
     bool pinned = 8;
+    // Absolute local path where the OCI object got mounted.
+    string mountpoint = 9;
 }
 
 message ListImagesResponse {
@@ -1531,6 +1539,9 @@ message PullImageResponse {
     // Reference to the image in use. For most runtimes, this should be an
     // image ID or digest.
     string image_ref = 1;
+
+    // Absolute local path where the OCI object got mounted.
+    string mountpoint = 2;
 }
 
 message RemoveImageRequest {
