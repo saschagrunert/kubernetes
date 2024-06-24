@@ -57,6 +57,10 @@ type ImageSpec struct {
 	// The annotations for the image.
 	// This should be passed to CRI during image pulls and returned when images are listed.
 	Annotations []Annotation
+	// Mount is an indicator to mount the OCI object (image or artifact).
+	Mount bool
+	// MountLabel is the SELinux mount label to be used.
+	MountLabel string
 }
 
 // ImageStats contains statistics about all the images currently available.
@@ -135,6 +139,8 @@ type Runtime interface {
 	ListMetricDescriptors(ctx context.Context) ([]*runtimeapi.MetricDescriptor, error)
 	// ListPodSandboxMetrics retrieves the metrics for all pod sandboxes.
 	ListPodSandboxMetrics(ctx context.Context) ([]*runtimeapi.PodSandboxMetrics, error)
+	// GetContainerStatus returns the status for the container.
+	GetContainerStatus(ctx context.Context, id ContainerID) (*Status, error)
 }
 
 // StreamingRuntime is the interface implemented by runtimes that handle the serving of the
@@ -150,7 +156,7 @@ type StreamingRuntime interface {
 type ImageService interface {
 	// PullImage pulls an image from the network to local storage using the supplied
 	// secrets if necessary. It returns a reference (digest or ID) to the pulled image.
-	PullImage(ctx context.Context, image ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *runtimeapi.PodSandboxConfig) (string, error)
+	PullImage(ctx context.Context, image ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *runtimeapi.PodSandboxConfig) (*runtimeapi.PullImageResponse, error)
 	// GetImageRef gets the reference (digest or ID) of the image which has already been in
 	// the local storage. It returns ("", nil) if the image isn't in the local storage.
 	GetImageRef(ctx context.Context, image ImageSpec) (string, error)
@@ -164,6 +170,8 @@ type ImageService interface {
 	ImageFsInfo(ctx context.Context) (*runtimeapi.ImageFsInfoResponse, error)
 	// GetImageSize returns the size of the image
 	GetImageSize(ctx context.Context, image ImageSpec) (uint64, error)
+	// GetOCIObjectMount returns the mountpoint of the image.
+	GetOCIObjectMount(ctx context.Context, image ImageSpec) (*OCIMount, error)
 }
 
 // Attacher interface allows to attach a container.
@@ -374,6 +382,8 @@ type Status struct {
 	Resources *ContainerResources
 	// User identity information of the first process of this container
 	User *ContainerUser
+	// Mounts are the volume mounts of the container
+	Mounts []Mount
 }
 
 // ContainerUser represents user identity information
@@ -433,6 +443,19 @@ type Image struct {
 	Spec ImageSpec
 	// Pin for preventing garbage collection
 	Pinned bool
+	// MountRef is set if the OCI object got mounted.
+	MountRef string
+	// ImageRef is set if the OCI object got mounted.
+	ImageRef string
+}
+
+// OCIMount is used to reference any OCI volume source mount.
+type OCIMount struct {
+	// Source is the type of the OCIMount
+	Source runtimeapi.OCIVolumeMountSource
+	// Ref is the value of the OCIMount. Can be either an image reference or a
+	// local path on disk based on the Source type.
+	Ref string
 }
 
 // EnvVar represents the environment variable.
@@ -466,6 +489,8 @@ type Mount struct {
 	SELinuxRelabel bool
 	// Requested propagation mode
 	Propagation runtimeapi.MountPropagation
+	// ImageRef is set if an OCI volume as image ID or digest should get mounted (special case).
+	ImageRef string
 }
 
 // PortMapping contains information about the port mapping.

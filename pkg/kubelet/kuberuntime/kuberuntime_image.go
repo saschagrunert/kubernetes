@@ -18,6 +18,7 @@ package kuberuntime
 
 import (
 	"context"
+	"fmt"
 
 	v1 "k8s.io/api/core/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -32,16 +33,16 @@ import (
 
 // PullImage pulls an image from the network to local storage using the supplied
 // secrets if necessary.
-func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecontainer.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *runtimeapi.PodSandboxConfig) (string, error) {
+func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecontainer.ImageSpec, pullSecrets []v1.Secret, podSandboxConfig *runtimeapi.PodSandboxConfig) (*runtimeapi.PullImageResponse, error) {
 	img := image.Image
 	repoToPull, _, _, err := parsers.ParseImageName(img)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	keyring, err := credentialprovidersecrets.MakeDockerKeyring(pullSecrets, m.keyring)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	imgSpec := toRuntimeAPIImageSpec(image)
@@ -50,13 +51,13 @@ func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecon
 	if !withCredentials {
 		klog.V(3).InfoS("Pulling image without credentials", "image", img)
 
-		imageRef, err := m.imageService.PullImage(ctx, imgSpec, nil, podSandboxConfig)
+		resp, err := m.imageService.PullImageFullResponse(ctx, imgSpec, nil, podSandboxConfig)
 		if err != nil {
 			klog.ErrorS(err, "Failed to pull image", "image", img)
-			return "", err
+			return nil, err
 		}
 
-		return imageRef, nil
+		return resp, nil
 	}
 
 	var pullErrs []error
@@ -70,16 +71,16 @@ func (m *kubeGenericRuntimeManager) PullImage(ctx context.Context, image kubecon
 			RegistryToken: currentCreds.RegistryToken,
 		}
 
-		imageRef, err := m.imageService.PullImage(ctx, imgSpec, auth, podSandboxConfig)
+		resp, err := m.imageService.PullImageFullResponse(ctx, imgSpec, auth, podSandboxConfig)
 		// If there was no error, return success
 		if err == nil {
-			return imageRef, nil
+			return resp, nil
 		}
 
 		pullErrs = append(pullErrs, err)
 	}
 
-	return "", utilerrors.NewAggregate(pullErrs)
+	return nil, utilerrors.NewAggregate(pullErrs)
 }
 
 // GetImageRef gets the ID of the image which has already been in
@@ -106,6 +107,37 @@ func (m *kubeGenericRuntimeManager) GetImageSize(ctx context.Context, image kube
 		return 0, nil
 	}
 	return resp.Image.Size_, nil
+}
+
+// GetOCIObjectMount gets the mount reference of the OCI object which has
+// already been in the local storage. It returns ("", nil) if the image is not
+// referencing any mount.
+func (m *kubeGenericRuntimeManager) GetOCIObjectMount(ctx context.Context, image kubecontainer.ImageSpec) (*kubecontainer.OCIMount, error) {
+	resp, err := m.imageService.ImageStatus(ctx, toRuntimeAPIImageSpec(image), false)
+	if err != nil {
+		klog.ErrorS(err, "Failed to get image status", "image", image.Image)
+		return nil, err
+	}
+
+	if resp.Image == nil || (resp.Image.MountRef == "" && resp.Image.ImageRef == "") {
+		return nil, nil
+	}
+
+	if resp.Image.MountRef != "" && resp.Image.ImageRef != "" {
+		return nil, fmt.Errorf("image mount_ref (%s) and image_ref (%s) are set at the same time by the runtime", resp.Image.MountRef, resp.Image.ImageRef)
+	}
+
+	if resp.Image.ImageRef != "" {
+		return &kubecontainer.OCIMount{
+			Source: runtimeapi.OCIVolumeMountSource_IMAGEREF,
+			Ref:    resp.Image.ImageRef,
+		}, nil
+	}
+
+	return &kubecontainer.OCIMount{
+		Source: runtimeapi.OCIVolumeMountSource_HOSTPATH,
+		Ref:    resp.Image.MountRef,
+	}, nil
 }
 
 // ListImages gets all images currently on the machine.
@@ -137,6 +169,7 @@ func (m *kubeGenericRuntimeManager) ListImages(ctx context.Context) ([]kubeconta
 			RepoDigests: img.RepoDigests,
 			Spec:        toKubeContainerImageSpec(img),
 			Pinned:      img.Pinned,
+			MountRef:    img.MountRef,
 		})
 	}
 

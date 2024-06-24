@@ -37,9 +37,9 @@ func TestPullImage(t *testing.T) {
 	_, _, fakeManager, err := createTestRuntimeManager()
 	assert.NoError(t, err)
 
-	imageRef, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: "busybox"}, nil, nil)
+	resp, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: "busybox"}, nil, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, "busybox", imageRef)
+	assert.Equal(t, "busybox", resp.ImageRef)
 
 	images, err := fakeManager.ListImages(ctx)
 	assert.NoError(t, err)
@@ -53,14 +53,14 @@ func TestPullImageWithError(t *testing.T) {
 	assert.NoError(t, err)
 
 	// trying to pull an image with an invalid name should return an error
-	imageRef, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: ":invalid"}, nil, nil)
+	resp, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: ":invalid"}, nil, nil)
 	assert.Error(t, err)
-	assert.Equal(t, "", imageRef)
+	assert.Nil(t, resp)
 
 	fakeImageService.InjectError("PullImage", fmt.Errorf("test-error"))
-	imageRef, err = fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: "busybox"}, nil, nil)
+	resp, err = fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: "busybox"}, nil, nil)
 	assert.Error(t, err)
-	assert.Equal(t, "", imageRef)
+	assert.Nil(t, resp)
 
 	images, err := fakeManager.ListImages(ctx)
 	assert.NoError(t, err)
@@ -75,10 +75,9 @@ func TestPullImageWithInvalidImageName(t *testing.T) {
 	fakeImageService.SetFakeImages(imageList)
 	for _, val := range imageList {
 		ctx := context.Background()
-		imageRef, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: val}, nil, nil)
+		resp, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: val}, nil, nil)
 		assert.Error(t, err)
-		assert.Equal(t, "", imageRef)
-
+		assert.Nil(t, resp)
 	}
 }
 
@@ -375,9 +374,9 @@ func TestPullWithSecretsWithError(t *testing.T) {
 				fakeImageService.InjectError("PullImage", fmt.Errorf("test-error"))
 			}
 
-			imageRef, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: test.imageName}, test.passedSecrets, nil)
+			resp, err := fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: test.imageName}, test.passedSecrets, nil)
 			assert.Error(t, err)
-			assert.Equal(t, "", imageRef)
+			assert.Nil(t, resp)
 
 			images, err := fakeManager.ListImages(ctx)
 			assert.NoError(t, err)

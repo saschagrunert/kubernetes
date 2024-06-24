@@ -76,6 +76,7 @@ const (
 	FailedMountOnFilesystemMismatch      = "FailedMountOnFilesystemMismatch"
 	FailedPrepareDynamicResources        = "FailedPrepareDynamicResources"
 	PossibleMemoryBackedVolumesOnDisk    = "PossibleMemoryBackedVolumesOnDisk"
+	FailedOCIMountPoint                  = "FailedOCIMountPoint"
 )
 
 // Image manager event reason list

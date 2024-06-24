@@ -18,6 +18,8 @@ package images
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -31,6 +33,7 @@ type pullResult struct {
 	imageSize    uint64
 	err          error
 	pullDuration time.Duration
+	mount        *kubecontainer.OCIMount
 }
 
 type imagePuller interface {
@@ -58,19 +61,60 @@ func (pip *parallelImagePuller) pullImage(ctx context.Context, spec kubecontaine
 			defer func() { <-pip.tokens }()
 		}
 		startTime := time.Now()
-		imageRef, err := pip.imageService.PullImage(ctx, spec, pullSecrets, podSandboxConfig)
+		res, err := pip.imageService.PullImage(ctx, spec, pullSecrets, podSandboxConfig)
+		if err != nil {
+			pullChan <- pullResult{
+				err:          err,
+				pullDuration: time.Since(startTime),
+			}
+			return
+		}
+		var mount *kubecontainer.OCIMount
+		if spec.Mount {
+			mount, err = toOCIMount(res)
+			if err != nil {
+				pullChan <- pullResult{
+					err:          err,
+					pullDuration: time.Since(startTime),
+				}
+				return
+			}
+		}
 		var size uint64
-		if err == nil && imageRef != "" {
+		if res.ImageRef != "" {
 			// Getting the image size with best effort, ignoring the error.
 			size, _ = pip.imageService.GetImageSize(ctx, spec)
 		}
 		pullChan <- pullResult{
-			imageRef:     imageRef,
+			imageRef:     res.ImageRef,
 			imageSize:    size,
 			err:          err,
 			pullDuration: time.Since(startTime),
+			mount:        mount,
 		}
 	}()
+}
+
+func toOCIMount(res *runtimeapi.PullImageResponse) (*kubecontainer.OCIMount, error) {
+	switch res.Source {
+	case runtimeapi.OCIVolumeMountSource_UNSUPPORTED:
+		return nil, errors.New("image mount unsupported by runtime")
+
+	case runtimeapi.OCIVolumeMountSource_HOSTPATH:
+		return &kubecontainer.OCIMount{
+			Source: runtimeapi.OCIVolumeMountSource_HOSTPATH,
+			Ref:    res.MountRef,
+		}, nil
+
+	case runtimeapi.OCIVolumeMountSource_IMAGEREF:
+		return &kubecontainer.OCIMount{
+			Source: runtimeapi.OCIVolumeMountSource_IMAGEREF,
+			Ref:    res.ImageRef,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown source type: %v", res.Source)
+	}
 }
 
 // Maximum number of image pull requests than can be queued.
@@ -108,18 +152,39 @@ func (sip *serialImagePuller) pullImage(ctx context.Context, spec kubecontainer.
 func (sip *serialImagePuller) processImagePullRequests() {
 	for pullRequest := range sip.pullRequests {
 		startTime := time.Now()
-		imageRef, err := sip.imageService.PullImage(pullRequest.ctx, pullRequest.spec, pullRequest.pullSecrets, pullRequest.podSandboxConfig)
+		res, err := sip.imageService.PullImage(pullRequest.ctx, pullRequest.spec, pullRequest.pullSecrets, pullRequest.podSandboxConfig)
+		if err != nil {
+			pullRequest.pullChan <- pullResult{
+				err: err,
+				// Note: pullDuration includes credential resolution and getting the image size.
+				pullDuration: time.Since(startTime),
+			}
+			return
+		}
+
+		var mount *kubecontainer.OCIMount
+		if pullRequest.spec.Mount {
+			mount, err = toOCIMount(res)
+			if err != nil {
+				pullRequest.pullChan <- pullResult{
+					err:          err,
+					pullDuration: time.Since(startTime),
+				}
+				return
+			}
+		}
+
 		var size uint64
-		if err == nil && imageRef != "" {
+		if res.ImageRef != "" {
 			// Getting the image size with best effort, ignoring the error.
 			size, _ = sip.imageService.GetImageSize(pullRequest.ctx, pullRequest.spec)
 		}
 		pullRequest.pullChan <- pullResult{
-			imageRef:  imageRef,
+			imageRef:  res.ImageRef,
 			imageSize: size,
-			err:       err,
 			// Note: pullDuration includes credential resolution and getting the image size.
 			pullDuration: time.Since(startTime),
+			mount:        mount,
 		}
 	}
 }
