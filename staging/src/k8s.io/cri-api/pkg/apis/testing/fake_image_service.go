@@ -190,13 +190,22 @@ func (r *FakeImageService) ImageStatus(_ context.Context, image *runtimeapi.Imag
 }
 
 // PullImage emulate pulling the image from the FakeImageService.
-func (r *FakeImageService) PullImage(_ context.Context, image *runtimeapi.ImageSpec, auth *runtimeapi.AuthConfig, podSandboxConfig *runtimeapi.PodSandboxConfig) (string, error) {
+func (r *FakeImageService) PullImage(ctx context.Context, image *runtimeapi.ImageSpec, auth *runtimeapi.AuthConfig, podSandboxConfig *runtimeapi.PodSandboxConfig) (string, error) {
+	resp, err := r.PullImageFullResponse(ctx, image, auth, podSandboxConfig)
+	if err != nil {
+		return "", err
+	}
+	return resp.ImageRef, nil
+}
+
+// PullImageFullResponse emulate pulling the image from the FakeImageService.
+func (r *FakeImageService) PullImageFullResponse(_ context.Context, image *runtimeapi.ImageSpec, auth *runtimeapi.AuthConfig, podSandboxConfig *runtimeapi.PodSandboxConfig) (*runtimeapi.PullImageResponse, error) {
 	r.Lock()
 	defer r.Unlock()
 
 	r.Called = append(r.Called, "PullImage")
 	if err := r.popError("PullImage"); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	r.pulledImages = append(r.pulledImages, &pulledImage{imageSpec: image, authConfig: auth})
@@ -207,7 +216,7 @@ func (r *FakeImageService) PullImage(_ context.Context, image *runtimeapi.ImageS
 		r.Images[imageID] = r.makeFakeImage(image)
 	}
 
-	return imageID, nil
+	return &runtimeapi.PullImageResponse{ImageRef: imageID}, nil
 }
 
 // RemoveImage removes image from the FakeImageService.

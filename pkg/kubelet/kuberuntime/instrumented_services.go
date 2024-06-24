@@ -308,6 +308,15 @@ func (in instrumentedImageManagerService) PullImage(ctx context.Context, image *
 	return imageRef, err
 }
 
+func (in instrumentedImageManagerService) PullImageFullResponse(ctx context.Context, image *runtimeapi.ImageSpec, auth *runtimeapi.AuthConfig, podSandboxConfig *runtimeapi.PodSandboxConfig) (*runtimeapi.PullImageResponse, error) {
+	const operation = "pull_image"
+	defer recordOperation(operation, time.Now())
+
+	resp, err := in.service.PullImageFullResponse(ctx, image, auth, podSandboxConfig)
+	recordError(operation, err)
+	return resp, err
+}
+
 func (in instrumentedImageManagerService) RemoveImage(ctx context.Context, image *runtimeapi.ImageSpec) error {
 	const operation = "remove_image"
 	defer recordOperation(operation, time.Now())

@@ -128,7 +128,10 @@ type ImageManagerService interface {
 	// ImageStatus returns the status of the image.
 	ImageStatus(ctx context.Context, image *runtimeapi.ImageSpec, verbose bool) (*runtimeapi.ImageStatusResponse, error)
 	// PullImage pulls an image with the authentication config.
+	// Deprecated: Use PullImageFullResponse instead
 	PullImage(ctx context.Context, image *runtimeapi.ImageSpec, auth *runtimeapi.AuthConfig, podSandboxConfig *runtimeapi.PodSandboxConfig) (string, error)
+	// PullImageFullResponse pulls an image with the authentication config and returns the full PullImageResponse instead of just the reference.
+	PullImageFullResponse(ctx context.Context, image *runtimeapi.ImageSpec, auth *runtimeapi.AuthConfig, podSandboxConfig *runtimeapi.PodSandboxConfig) (*runtimeapi.PullImageResponse, error)
 	// RemoveImage removes the image.
 	RemoveImage(ctx context.Context, image *runtimeapi.ImageSpec) error
 	// ImageFsInfo returns information of the filesystem(s) used to store the read-only layers and the writeable layer.
