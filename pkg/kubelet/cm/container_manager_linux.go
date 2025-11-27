@@ -1105,6 +1105,10 @@ func (cm *containerManagerImpl) UpdateAllocatedResourcesStatus(pod *v1.Pod, stat
 	}
 }
 
+func (cm *containerManagerImpl) RemovePodDeviceAllocations(podUID string) {
+	cm.deviceManager.RemovePod(podUID)
+}
+
 func (cm *containerManagerImpl) Updates() <-chan resourceupdates.Update {
 	return cm.resourceUpdates
 }

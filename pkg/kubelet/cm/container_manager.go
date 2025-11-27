@@ -152,6 +152,10 @@ type ContainerManager interface {
 	// UpdateAllocatedResourcesStatus updates the status of allocated resources for the pod.
 	UpdateAllocatedResourcesStatus(pod *v1.Pod, status *v1.PodStatus)
 
+	// RemovePodDeviceAllocations immediately frees any devices allocated to the specified pod.
+	// This is used to cleanup device allocations when a pod fails admission.
+	RemovePodDeviceAllocations(podUID string)
+
 	// Updates returns a channel that receives an Update when the device changed its status.
 	Updates() <-chan resourceupdates.Update
 

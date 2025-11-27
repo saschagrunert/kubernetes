@@ -1349,6 +1349,46 @@ func (_c *MockContainerManager_PrepareDynamicResources_Call) RunAndReturn(run fu
 	return _c
 }
 
+// RemovePodDeviceAllocations provides a mock function for the type MockContainerManager
+func (_mock *MockContainerManager) RemovePodDeviceAllocations(podUID string) {
+	_mock.Called(podUID)
+	return
+}
+
+// MockContainerManager_RemovePodDeviceAllocations_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemovePodDeviceAllocations'
+type MockContainerManager_RemovePodDeviceAllocations_Call struct {
+	*mock.Call
+}
+
+// RemovePodDeviceAllocations is a helper method to define mock.On call
+//   - podUID string
+func (_e *MockContainerManager_Expecter) RemovePodDeviceAllocations(podUID interface{}) *MockContainerManager_RemovePodDeviceAllocations_Call {
+	return &MockContainerManager_RemovePodDeviceAllocations_Call{Call: _e.mock.On("RemovePodDeviceAllocations", podUID)}
+}
+
+func (_c *MockContainerManager_RemovePodDeviceAllocations_Call) Run(run func(podUID string)) *MockContainerManager_RemovePodDeviceAllocations_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerManager_RemovePodDeviceAllocations_Call) Return() *MockContainerManager_RemovePodDeviceAllocations_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockContainerManager_RemovePodDeviceAllocations_Call) RunAndReturn(run func(podUID string)) *MockContainerManager_RemovePodDeviceAllocations_Call {
+	_c.Run(run)
+	return _c
+}
+
 // ShouldResetExtendedResourceCapacity provides a mock function for the type MockContainerManager
 func (_mock *MockContainerManager) ShouldResetExtendedResourceCapacity() bool {
 	ret := _mock.Called()

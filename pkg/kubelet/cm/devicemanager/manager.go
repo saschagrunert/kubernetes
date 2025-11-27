@@ -577,6 +577,26 @@ func (m *ManagerImpl) UpdateAllocatedDevices() {
 	m.allocatedDevices = m.podDevices.devices()
 }
 
+// RemovePod immediately frees any Devices that are allocated to the specified pod.
+// This is used to cleanup device allocations when a pod fails admission.
+func (m *ManagerImpl) RemovePod(podUID string) {
+	// Use klog.TODO() because we currently do not have a proper logger to pass in.
+	// Replace this with an appropriate context when refactoring this function to accept a logger parameter.
+	logger := klog.TODO()
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	// Check if this pod has any device allocations
+	if !m.podDevices.hasPod(podUID) {
+		return
+	}
+
+	logger.V(3).Info("Removing device allocations for pod", "podUID", podUID)
+	m.podDevices.delete([]string{podUID})
+	// Regenerate allocatedDevices after we update pod allocation information.
+	m.allocatedDevices = m.podDevices.devices()
+}
+
 // Returns list of device Ids we need to allocate with Allocate rpc call.
 // Returns empty list in case we don't need to issue the Allocate rpc call.
 func (m *ManagerImpl) devicesToAllocate(ctx context.Context, podUID, contName, resource string, required int, reusableDevices sets.Set[string]) (sets.Set[string], error) {

@@ -196,6 +196,9 @@ func (cm *containerManagerStub) PodMightNeedToUnprepareResources(UID types.UID) 
 func (cm *containerManagerStub) UpdateAllocatedResourcesStatus(pod *v1.Pod, status *v1.PodStatus) {
 }
 
+func (cm *containerManagerStub) RemovePodDeviceAllocations(podUID string) {
+}
+
 func (cm *containerManagerStub) Updates() <-chan resourceupdates.Update {
 	return nil
 }

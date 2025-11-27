@@ -92,6 +92,10 @@ type Manager interface {
 	// UpdateAllocatedDevices frees any Devices that are bound to terminated pods.
 	UpdateAllocatedDevices()
 
+	// RemovePod immediately frees any Devices that are allocated to the specified pod.
+	// This is used to cleanup device allocations when a pod fails admission.
+	RemovePod(podUID string)
+
 	// Updates returns a channel that receives an Update when the device changed its status.
 	Updates() <-chan resourceupdates.Update
 }

@@ -2474,6 +2474,8 @@ func (kl *Kubelet) rejectPod(pod *v1.Pod, reason, message string) {
 		Phase:    v1.PodFailed,
 		Reason:   reason,
 		Message:  "Pod was rejected: " + message})
+	// Cleanup any device allocations that may have been made during admission
+	kl.containerManager.RemovePodDeviceAllocations(string(pod.UID))
 }
 
 func recordAdmissionRejection(reason string) {
